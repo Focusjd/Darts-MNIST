@@ -59,8 +59,8 @@ def train(args, model, device, train_loader, optimizer, epoch):
                 100. * batch_idx / len(train_loader), loss.item()))
             if args.dry_run:
                 break
-    plt.imshow(pic.cpu(), cmap='gray')
-    plt.show()
+    # plt.imshow(pic.cpu(), cmap='gray')
+    # plt.show()
 
 
 def test(model, device, test_loader):
@@ -89,8 +89,8 @@ def main():
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=14, metavar='N',
-                        help='number of epochs to train (default: 14)')
+    parser.add_argument('--epochs', type=int, default=1, metavar='N',
+                        help='number of epochs to train (default: 1)')
     parser.add_argument('--lr', type=float, default=1.0, metavar='LR',
                         help='learning rate (default: 1.0)')
     parser.add_argument('--gamma', type=float, default=0.7, metavar='M',
@@ -130,10 +130,10 @@ def main():
         ])
 
     # Make train dataset split
-    dataset1 = datasets.MNIST('./data', train=True, download=True,
+    dataset1 = datasets.MNIST('../data', train=True, download=True,
                        transform=transform)
     # Make test dataset split
-    dataset2 = datasets.MNIST('./data', train=False,
+    dataset2 = datasets.MNIST('../data', train=False,
                        transform=transform)
 
     # Convert the dataset to dataloader, including train_kwargs and test_kwargs

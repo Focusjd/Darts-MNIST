@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import glob
+from matplotlib import pyplot as plt
 import numpy as np
 import torch
 from torchvision.datasets.mnist import MNIST
@@ -14,6 +15,7 @@ import torchvision.datasets as dset
 import torch.backends.cudnn as cudnn
 import genotypes
 import torch.nn.functional as F
+from torchvision import datasets, transforms
 
 from model import NetworkCIFAR as Network
 from torch.utils.tensorboard import SummaryWriter   
@@ -46,15 +48,15 @@ parser.add_argument('--resume', type=str, default='')
 args = parser.parse_args()
 
 args.save = 'eval-{}-{}'.format(args.save, time.strftime("%Y%m%d-%H%M%S"))
-utils.create_exp_dir(args.save, scripts_to_save=glob.glob('*.py'))
-writer = SummaryWriter(args.save)
+# utils.create_exp_dir(args.save, scripts_to_save=glob.glob('*.py'))
+# writer = SummaryWriter(args.save)
 
-log_format = '%(asctime)s %(message)s'
-logging.basicConfig(stream=sys.stdout, level=logging.INFO,
-    format=log_format, datefmt='%m/%d %I:%M:%S %p')
-fh = logging.FileHandler(os.path.join(args.save, 'log.txt'))
-fh.setFormatter(logging.Formatter(log_format))
-logging.getLogger().addHandler(fh)
+# log_format = '%(asctime)s %(message)s'
+# logging.basicConfig(stream=sys.stdout, level=logging.INFO,
+#     format=log_format, datefmt='%m/%d %I:%M:%S %p')
+# fh = logging.FileHandler(os.path.join(args.save, 'log.txt'))
+# fh.setFormatter(logging.Formatter(log_format))
+# logging.getLogger().addHandler(fh)
 
 MNIST_CLASSES = 10
 
@@ -199,32 +201,58 @@ def infer(valid_queue, model, criterion):
   return top1.avg, top5.avg, objs.avg
 
 def demo():
-    PATH = ''
+    PATH = 'eval-EXP-20211129-223639/weights.pt'
     test_kwargs = {'batch_size': 1000}
-    dataset2 = dset.MNIST(root=args.data, train=False, transform=utils._data_transforms_MNIST)
+
+    transform=transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.1307,), (0.3081,))
+    ])
+    
+    dataset2 = dset.MNIST(root=args.data, train=False, transform=transform)
     test_loader = torch.utils.data.DataLoader(dataset2, **test_kwargs)
 
     genotype = eval("genotypes.%s" % args.arch)
     model = Network(args.init_channels, MNIST_CLASSES, args.layers, args.auxiliary, genotype)
+    model.drop_path_prob = 0
     model.load_state_dict(torch.load(PATH))
     model = model.cuda()
     model.eval()
     test_loss = 0
     correct = 0
     with torch.no_grad():
+        f_list = []
         for data, target in test_loader:
             data, target = data.cuda(), target.cuda()
             output = model(data)
+            output = output[0]
             test_loss += F.cross_entropy(output, target, reduction='sum').item()  # sum up batch loss
-            pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
+            pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability\
+            
+            for i, result in enumerate(pred.eq(target.view_as(pred))):
+                if not result.item():
+                    print("fail prediction no:", i)
+                    f_list.append(data[i])
+
             correct += pred.eq(target.view_as(pred)).sum().item()
 
+    print(len(test_loader.dataset)-correct == len(f_list))
     test_loss /= len(test_loader.dataset)
 
     print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
         test_loss, correct, len(test_loader.dataset),
         100. * correct / len(test_loader.dataset)))
 
+    plt.figure()
+    for i, image in enumerate(f_list):
+        plt.subplot(5,8,i+1)
+        plt.imshow(image.cpu().numpy().transpose(1,2,0), cmap='gray')
+
+    # for images in f_list:
+    #     a = torch.cat(images.transpose(1,2,0))
+    # plt.imshow(a, cmap='gray')
+    plt.show()
+
 if __name__ == '__main__':
-  main() 
+  demo() 
 
