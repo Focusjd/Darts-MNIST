@@ -9,27 +9,29 @@ import utils
 import logging
 import argparse
 import torch.nn as nn
-import genotypes
 import torch.utils
 import torchvision.datasets as dset
 import torch.backends.cudnn as cudnn
+import genotypes
+import torch.nn.functional as F
 
-from torch.autograd import Variable
 from model import NetworkCIFAR as Network
+from torch.utils.tensorboard import SummaryWriter   
+
 
 MNIST_GENOTYPE = "Genotype(normal=[('dil_conv_3x3', 1), ('max_pool_3x3', 0), ('skip_connect', 0), ('dil_conv_5x5', 2), ('dil_conv_3x3', 0), ('sep_conv_3x3', 2), ('sep_conv_3x3', 4), ('dil_conv_5x5', 0)], normal_concat=range(2, 6), reduce=[('avg_pool_3x3', 1), ('sep_conv_3x3', 0), ('sep_conv_5x5', 1), ('dil_conv_5x5', 2), ('sep_conv_5x5', 3), ('dil_conv_5x5', 2), ('avg_pool_3x3', 0), ('sep_conv_3x3', 4)], reduce_concat=range(2, 6))"
 
 parser = argparse.ArgumentParser("Darts-MNIST-train")
 parser.add_argument('--data', type=str, default='../data', help='location of the data corpus')
-parser.add_argument('--batch_size', type=int, default=96, help='batch size')
+parser.add_argument('--batch_size', type=int, default=256, help='batch size')
 parser.add_argument('--learning_rate', type=float, default=0.025, help='init learning rate')
 parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 parser.add_argument('--weight_decay', type=float, default=3e-4, help='weight decay')
 parser.add_argument('--report_freq', type=float, default=50, help='report frequency')
 parser.add_argument('--gpu', type=int, default=0, help='gpu device id')
-parser.add_argument('--epochs', type=int, default=600, help='num of training epochs')
-parser.add_argument('--init_channels', type=int, default=36, help='num of init channels')
-parser.add_argument('--layers', type=int, default=20, help='total number of layers')
+parser.add_argument('--epochs', type=int, default=100, help='num of training epochs')
+parser.add_argument('--init_channels', type=int, default=18, help='num of init channels')
+parser.add_argument('--layers', type=int, default=24, help='total number of layers')
 parser.add_argument('--model_path', type=str, default='saved_models', help='path to save the model')
 parser.add_argument('--auxiliary', action='store_true', default=False, help='use auxiliary tower')
 parser.add_argument('--auxiliary_weight', type=float, default=0.4, help='weight for auxiliary loss')
@@ -41,11 +43,11 @@ parser.add_argument('--seed', type=int, default=0, help='random seed')
 parser.add_argument('--arch', type=str, default=MNIST_GENOTYPE, help='which architecture to use')
 parser.add_argument('--grad_clip', type=float, default=5, help='gradient clipping')
 parser.add_argument('--resume', type=str, default='')
-parser.add_argument('--is_cifar100', type=int, default=0)
 args = parser.parse_args()
 
 args.save = 'eval-{}-{}'.format(args.save, time.strftime("%Y%m%d-%H%M%S"))
 utils.create_exp_dir(args.save, scripts_to_save=glob.glob('*.py'))
+writer = SummaryWriter(args.save)
 
 log_format = '%(asctime)s %(message)s'
 logging.basicConfig(stream=sys.stdout, level=logging.INFO,
@@ -90,10 +92,8 @@ def main():
       momentum=args.momentum,
       weight_decay=args.weight_decay
       )
-  if args.is_cifar100:
-    train_transform, valid_transform = utils._data_transforms_cifar100(args)
-  else:
-    train_transform, valid_transform = utils._data_transforms_cifar10(args)
+
+  train_transform, valid_transform = utils._data_transforms_MNIST(args)
 
 
   train_data = dset.MNIST(root=args.data, train=True, download=True, transform=train_transform)
@@ -117,12 +117,20 @@ def main():
     logging.info('epoch %d lr %e', epoch, scheduler.get_lr()[0])
     model.drop_path_prob = args.drop_path_prob * epoch / args.epochs
 
-    train_acc, train_obj = train(train_queue, model, criterion, optimizer)
+    train_acc_top1, train_acc_top5, train_obj = train(train_queue, model, criterion, optimizer)
     scheduler.step()
-    logging.info('train_acc %f', train_acc)
+    logging.info('train_acc_top1 %f', train_acc_top1)
 
-    valid_acc, valid_obj = infer(valid_queue, model, criterion)
-    logging.info('valid_acc %f', valid_acc)
+    writer.add_scalar('Loss/train', train_obj, epoch)
+    writer.add_scalar('Top1_Accuracy/train', train_acc_top1, epoch)
+    writer.add_scalar('Top5_Accuracy/train', train_acc_top5, epoch)
+
+    valid_acc_top1, valid_acc_top5, valid_obj = infer(valid_queue, model, criterion)
+    logging.info('test_acc %f', valid_acc_top1)
+
+    writer.add_scalar('Loss/test', valid_obj, epoch)
+    writer.add_scalar('Top1_Accuracy/test', valid_acc_top1, epoch)
+    writer.add_scalar('Top5_Accuracy/test', valid_acc_top5, epoch)
 
     utils.save(model, os.path.join(args.save, 'weights.pt'))
     save_checkpoint({
@@ -160,8 +168,9 @@ def train(train_queue, model, criterion, optimizer):
 
     if step % args.report_freq == 0:
       logging.info('train %03d %e %f %f', step, objs.avg, top1.avg, top5.avg)
+      
 
-  return top1.avg, objs.avg
+  return top1.avg, top5.avg, objs.avg
 
 
 def infer(valid_queue, model, criterion):
@@ -187,8 +196,34 @@ def infer(valid_queue, model, criterion):
         if step % args.report_freq == 0:
           logging.info('valid %03d %e %f %f', step, objs.avg, top1.avg, top5.avg)
 
-  return top1.avg, objs.avg
+  return top1.avg, top5.avg, objs.avg
 
+def demo():
+    PATH = ''
+    test_kwargs = {'batch_size': 1000}
+    dataset2 = dset.MNIST(root=args.data, train=False, transform=utils._data_transforms_MNIST)
+    test_loader = torch.utils.data.DataLoader(dataset2, **test_kwargs)
+
+    genotype = eval("genotypes.%s" % args.arch)
+    model = Network(args.init_channels, MNIST_CLASSES, args.layers, args.auxiliary, genotype)
+    model.load_state_dict(torch.load(PATH))
+    model = model.cuda()
+    model.eval()
+    test_loss = 0
+    correct = 0
+    with torch.no_grad():
+        for data, target in test_loader:
+            data, target = data.cuda(), target.cuda()
+            output = model(data)
+            test_loss += F.cross_entropy(output, target, reduction='sum').item()  # sum up batch loss
+            pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
+            correct += pred.eq(target.view_as(pred)).sum().item()
+
+    test_loss /= len(test_loader.dataset)
+
+    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
+        test_loss, correct, len(test_loader.dataset),
+        100. * correct / len(test_loader.dataset)))
 
 if __name__ == '__main__':
   main() 

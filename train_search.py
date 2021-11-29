@@ -184,11 +184,6 @@ def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr):
 
     if step % args.report_freq == 0:
       logging.info('train %03d %e %f %f', step, objs.avg, top1.avg, top5.avg)
-    
-    # writer.add_scalar('Loss/t', objs.avg, step)
-    # writer.add_scalar('Top1_Accuracy/t', top1.avg, step)
-    # writer.add_scalar('Top5_Accuracy/t', top5.avg, step)
-
 
   return top1.avg, top5.avg, objs.avg
 
